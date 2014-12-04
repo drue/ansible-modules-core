@@ -1,6 +1,14 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
+####
+####
+#### WARNING: this file has been hacked to accomodate rules from security groups in other accounts, particularly the amazon-elb-sg group
+#### I don't think boto can query an sg like that (found an old issue on github) so I just hacked this module ta hondle it
+#### an issue for this module was filed but Ansible autoclosed it when the broke out the modules repo
+#### the issue has been refiled
+#### stop using this once Ansible is updated
+
 
 DOCUMENTATION = '''
 ---
@@ -109,16 +117,22 @@ EXAMPLES = '''
 
 try:
     import boto.ec2
+    from boto.ec2.securitygroup import SecurityGroup
 except ImportError:
     print "failed=True msg='boto required for this module'"
     sys.exit(1)
 
-
 def addRulesToLookup(rules, prefix, dict):
     for rule in rules:
         for grant in rule.grants:
-            dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
-                                        grant.group_id, grant.cidr_ip)] = rule
+            if grant.owner_id and not grant.owner_id.isdigit():
+                ## this means a rule is in place from a different account (such as amazon-elb), our own ownerid is a number
+                ## although we have the group_id here, we don't have it below so we recreate the owner/group name
+                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
+                                            grant.owner_id + '/' + grant.groupName, grant.cidr_ip)] = rule                
+            else:
+                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
+                                            grant.group_id, grant.cidr_ip)] = rule
 
 
 def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
@@ -133,7 +147,6 @@ def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
     function validate the rule specification and return either a non-None
     group_id or a non-None ip range.
     """
-
     group_id = None
     group_name = None
     ip = None
@@ -155,19 +168,20 @@ def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
             groups[group_id] = group
             groups[group_name] = group
         else:
-            if not rule.get('group_desc', '').strip():
-                module.fail_json(msg="group %s will be automatically created by rule %s and no description was provided" % (group_name, rule))
-            if not module.check_mode:
-                auto_group = ec2.create_security_group(group_name, rule['group_desc'], vpc_id=vpc_id)
-                group_id = auto_group.id
-                groups[group_id] = auto_group
-                groups[group_name] = auto_group
-            target_group_created = True
+            ## don't try to create an sg that is in another account
+            if not "/" in group_name:
+                if not rule.get('group_desc', '').strip():
+                    module.fail_json(msg="group %s will be automatically created by rule %s and no description was provided" % (group_name, rule))
+                if not module.check_mode:
+                    auto_group = ec2.create_security_group(group_name, rule['group_desc'], vpc_id=vpc_id)
+                    group_id = auto_group.id
+                    groups[group_id] = auto_group
+                    groups[group_name] = auto_group
+                target_group_created = True
     elif 'cidr_ip' in rule:
         ip = rule['cidr_ip']
 
     return group_id, ip, target_group_created
-
 
 def main():
     argument_spec = ec2_argument_spec()
@@ -265,7 +279,6 @@ def main():
         # Manage ingress rules
         groupRules = {}
         addRulesToLookup(group.rules, 'in', groupRules)
-
         # Now, go through all provided rules and ensure they are there.
         if rules:
             for rule in rules:
@@ -279,7 +292,12 @@ def main():
                     rule['to_port'] = None
 
                 # If rule already exists, don't later delete it
-                ruleId = "%s-%s-%s-%s-%s-%s" % ('in', rule['proto'], rule['from_port'], rule['to_port'], group_id, ip)
+                if rule.has_key('group_name') and "/" in rule['group_name']:
+                    ## this is a third party rule and we don't know the group_id, use group_name
+                    ruleId = "%s-%s-%s-%s-%s-%s" % ('in', rule['proto'], rule['from_port'], rule['to_port'], rule['group_name'], ip)
+                else:
+                    ruleId = "%s-%s-%s-%s-%s-%s" % ('in', rule['proto'], rule['from_port'], rule['to_port'], group_id, ip)
+                    
                 if ruleId in groupRules:
                     del groupRules[ruleId]
                 # Otherwise, add new rule
@@ -287,11 +305,13 @@ def main():
                     grantGroup = None
                     if group_id:
                         grantGroup = groups[group_id]
-
+                    elif rule.has_key('group_name') and '/' in rule['group_name']:
+                        # third party rule, create an SG
+                        owner_id, owner_name = rule['group_name'].split('/')
+                        grantGroup = SecurityGroup(owner_id=owner_id, name=owner_name)
                     if not module.check_mode:
                         group.authorize(rule['proto'], rule['from_port'], rule['to_port'], ip, grantGroup)
                     changed = True
-
         # Finally, remove anything left in the groupRules -- these will be defunct rules
         if purge_rules:
             for rule in groupRules.itervalues() :
