@@ -138,9 +138,19 @@ def addRulesToLookup(rules, prefix, dict):
     for rule in rules:
         for grant in rule.grants:
             if grant.owner_id and not grant.owner_id.isdigit():
+<<<<<<< HEAD
                 dict[make_rule_key(prefix, rule, grant.owner_id + '/' + grant.groupName, grant.cidr_ip)] = rule                
             else:
                 dict[make_rule_key(prefix, rule, grant.group_id, grant.cidr_ip)] = rule
+=======
+                ## this means a rule is in place from a different account (such as amazon-elb), our own ownerid is a number
+                ## although we have the group_id here, we don't have it below so we recreate the owner/group name
+                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
+                                            grant.owner_id + '/' + grant.groupName, grant.cidr_ip)] = rule                
+            else:
+                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
+                                            grant.group_id, grant.cidr_ip)] = rule
+>>>>>>> hack ec2_group to be able to add ingress rules with security groups from other accounts, such as amazon-elb/amazon-elb-sg
 
 
 def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
