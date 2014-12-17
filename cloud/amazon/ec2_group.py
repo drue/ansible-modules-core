@@ -122,17 +122,25 @@ except ImportError:
     print "failed=True msg='boto required for this module'"
     sys.exit(1)
 
+
+def make_rule_key(prefix, rule, group_id, cidr_ip):
+    """Creates a unique key for an individual group rule"""
+    if isinstance(rule, dict):
+        proto, from_port, to_port = (rule.get(x, None) for x in ('proto', 'from_port', 'to_port'))
+    else:  # isinstance boto.ec2.securitygroup.IPPermissions
+        proto, from_port, to_port = (getattr(rule, x, None) for x in ('ip_protocol', 'from_port', 'to_port'))
+
+    key = "%s-%s-%s-%s-%s-%s" % (prefix, proto, from_port, to_port, group_id, cidr_ip)
+    return key.lower().replace('-none', '-None')
+
+
 def addRulesToLookup(rules, prefix, dict):
     for rule in rules:
         for grant in rule.grants:
             if grant.owner_id and not grant.owner_id.isdigit():
-                ## this means a rule is in place from a different account (such as amazon-elb), our own ownerid is a number
-                ## although we have the group_id here, we don't have it below so we recreate the owner/group name
-                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
-                                            grant.owner_id + '/' + grant.groupName, grant.cidr_ip)] = rule                
+                dict[make_rule_key(prefix, rule, grant.owner_id + '/' + grant.groupName, grant.cidr_ip)] = rule                
             else:
-                dict["%s-%s-%s-%s-%s-%s" % (prefix, rule.ip_protocol, rule.from_port, rule.to_port,
-                                            grant.group_id, grant.cidr_ip)] = rule
+                dict[make_rule_key(prefix, rule, grant.group_id, grant.cidr_ip)] = rule
 
 
 def get_target_from_rule(module, ec2, rule, name, group, groups, vpc_id):
@@ -294,9 +302,10 @@ def main():
                 # If rule already exists, don't later delete it
                 if rule.has_key('group_name') and "/" in rule['group_name']:
                     ## this is a third party rule and we don't know the group_id, use group_name
-                    ruleId = "%s-%s-%s-%s-%s-%s" % ('in', rule['proto'], rule['from_port'], rule['to_port'], rule['group_name'], ip)
+                    ruleId = make_rule_key('in', rule, rule['group_name'], ip)
                 else:
-                    ruleId = "%s-%s-%s-%s-%s-%s" % ('in', rule['proto'], rule['from_port'], rule['to_port'], group_id, ip)
+                    ruleId = make_rule_key('in', rule, group_id, ip)
+
                     
                 if ruleId in groupRules:
                     del groupRules[ruleId]
@@ -340,7 +349,7 @@ def main():
                     rule['to_port'] = None
 
                 # If rule already exists, don't later delete it
-                ruleId = "%s-%s-%s-%s-%s-%s" % ('out', rule['proto'], rule['from_port'], rule['to_port'], group_id, ip)
+                ruleId = make_rule_key('out', rule, group_id, ip)
                 if ruleId in groupRules:
                     del groupRules[ruleId]
                 # Otherwise, add new rule
