@@ -196,9 +196,9 @@ def main():
     argument_spec.update(dict(
             name=dict(required=True),
             description=dict(required=True),
-            vpc_id=dict(),
-            rules=dict(),
-            rules_egress=dict(),
+            vpc_id=dict(type='str'),
+            rules=dict(type='list'),
+            rules_egress=dict(type='list'),
             state = dict(default='present', choices=['present', 'absent']),
             purge_rules=dict(default=True, required=False, type='bool'),
             purge_rules_egress=dict(default=True, required=False, type='bool'),
